@@ -71,10 +71,11 @@ pub fn load_session_record(path: &Path, system_prompt: &str) -> Result<SessionRe
     let value: serde_json::Value =
         serde_json::from_str(&raw).with_context(|| format!("parse {}", path.display()))?;
 
-    let ver = value
+    let ver_u64 = value
         .get("version")
         .and_then(serde_json::Value::as_u64)
-        .unwrap_or(2) as u32;
+        .unwrap_or(2);
+    let ver = u32::try_from(ver_u64).unwrap_or(2);
 
     let mut record = if ver == 1 {
         let legacy: LegacySessionV1 = serde_json::from_value(value)

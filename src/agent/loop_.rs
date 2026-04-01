@@ -16,7 +16,6 @@ use crate::tools::{self, Tool};
 use crate::util::truncate_with_ellipsis;
 use anyhow::Result;
 use regex::{Regex, RegexSet};
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::fmt::Write;
 use std::io::Write as _;

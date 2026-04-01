@@ -137,6 +137,8 @@ ZeroClaw already provides a Rust-first, lightweight agent runtime (memory RAG, h
 | Compaction job: summarized segments + pointer to full archive | Align with existing `compact_context` / summary behavior. |
 | Retention / GC policy | Privacy and disk usage. |
 
+**Started (slice):** Versioned `SessionRecord` in `src/agent/session_record.rs` (v2 on disk, migrates v1 interactive JSON); `SessionCompactionMeta` stores archive-relative paths + last summary excerpt; `auto_compact_history` appends compacted messages to `~/.zeroclaw/sessions/archives/*.jsonl` when the home directory exists. **Still open:** unified resume across gateway/daemon/SQLite, retention/GC, explicit dynamic-context reload tests.
+
 **Exit criteria:** Restart and continue session; compaction measurably reduces tokens without losing recoverability.
 
 ---
