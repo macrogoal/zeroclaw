@@ -74,6 +74,7 @@ pub(crate) mod service;
 pub(crate) mod skills;
 pub mod sop;
 pub mod tools;
+pub use tools::run_mcp_stdio_server;
 pub(crate) mod tunnel;
 pub(crate) mod util;
 pub mod verifiable_intent;

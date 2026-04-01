@@ -337,6 +337,10 @@ pub struct Config {
     #[serde(default, alias = "mcpServers")]
     pub mcp: McpConfig,
 
+    /// Expose ZeroClaw as an MCP tool server (`[mcp_serve]`).
+    #[serde(default)]
+    pub mcp_serve: McpServeConfig,
+
     /// Dynamic node discovery configuration (`[nodes]`).
     #[serde(default)]
     pub nodes: NodesConfig,
@@ -932,6 +936,37 @@ impl Default for McpConfig {
             enabled: false,
             deferred_loading: default_deferred_loading(),
             servers: Vec::new(),
+        }
+    }
+}
+
+fn default_mcp_serve_tool_timeout_secs() -> u64 {
+    120
+}
+
+/// Bidirectional MCP: expose ZeroClaw tools as an MCP **server** (`[mcp_serve]`).
+///
+/// Used by `zeroclaw mcp serve`. Stdio transport only in this release; see docs for policy.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct McpServeConfig {
+    /// Tool names to expose. Empty + no CLI `--allow-tool` → `memory_recall` and `file_read` only.
+    #[serde(default)]
+    pub allowed_tools: Vec<String>,
+    /// Per-tool execution timeout (seconds). Minimum effective value: 1.
+    #[serde(default = "default_mcp_serve_tool_timeout_secs")]
+    pub tool_timeout_secs: u64,
+    /// When `false` (default), only read-oriented tools may be listed without widening policy.
+    /// Set `true` only after review — any registered tool name may then be allowlisted.
+    #[serde(default)]
+    pub relax_tool_policy: bool,
+}
+
+impl Default for McpServeConfig {
+    fn default() -> Self {
+        Self {
+            allowed_tools: Vec::new(),
+            tool_timeout_secs: default_mcp_serve_tool_timeout_secs(),
+            relax_tool_policy: false,
         }
     }
 }
@@ -7985,6 +8020,7 @@ impl Default for Config {
             transcription: TranscriptionConfig::default(),
             tts: TtsConfig::default(),
             mcp: McpConfig::default(),
+            mcp_serve: McpServeConfig::default(),
             nodes: NodesConfig::default(),
             workspace: WorkspaceConfig::default(),
             notion: NotionConfig::default(),
@@ -11045,6 +11081,7 @@ default_temperature = 0.7
             transcription: TranscriptionConfig::default(),
             tts: TtsConfig::default(),
             mcp: McpConfig::default(),
+            mcp_serve: McpServeConfig::default(),
             nodes: NodesConfig::default(),
             workspace: WorkspaceConfig::default(),
             notion: NotionConfig::default(),
@@ -11572,6 +11609,7 @@ default_temperature = 0.7
             transcription: TranscriptionConfig::default(),
             tts: TtsConfig::default(),
             mcp: McpConfig::default(),
+            mcp_serve: McpServeConfig::default(),
             nodes: NodesConfig::default(),
             workspace: WorkspaceConfig::default(),
             notion: NotionConfig::default(),

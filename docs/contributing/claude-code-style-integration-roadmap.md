@@ -118,6 +118,8 @@ ZeroClaw already provides a Rust-first, lightweight agent runtime (memory RAG, h
 
 **Exit criteria:** Manual verification with one external client; contract tests for list + one call.
 
+**Shipped (slice):** `zeroclaw mcp serve` — stdio MCP (`2024-11-05`), curated allowlist via `[mcp_serve]` + `--allow-tool`, safe default tools (`memory_recall`, `file_read`) unless `relax_tool_policy = true`. Does not re-expose external MCP client tools. HTTP transport deferred.
+
 **Risk:** High (new attack surface).
 
 ---

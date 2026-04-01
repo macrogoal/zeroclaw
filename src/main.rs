@@ -458,6 +458,12 @@ Examples:
         memory_command: MemoryCommands,
     },
 
+    /// Expose ZeroClaw tools as an MCP server (stdio JSON-RPC for Cursor, Claude Desktop, etc.)
+    Mcp {
+        #[command(subcommand)]
+        mcp_command: McpCommands,
+    },
+
     /// Manage configuration
     #[command(long_about = "\
 Manage ZeroClaw configuration.
@@ -756,6 +762,16 @@ enum DoctorCommands {
         /// Maximum number of events to display
         #[arg(long, default_value = "20")]
         limit: usize,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum McpCommands {
+    /// Serve MCP over stdin/stdout (newline-delimited JSON-RPC)
+    Serve {
+        /// Add a tool name to the allowlist (repeatable). Merged with `[mcp_serve].allowed_tools`.
+        #[arg(long = "allow-tool")]
+        allow_tool: Vec<String>,
     },
 }
 
@@ -1329,6 +1345,12 @@ async fn main() -> Result<()> {
         Commands::Memory { memory_command } => {
             memory::cli::handle_command(memory_command, &config).await
         }
+
+        Commands::Mcp { mcp_command } => match mcp_command {
+            McpCommands::Serve { allow_tool } => {
+                Box::pin(tools::run_mcp_stdio_server(config, allow_tool)).await
+            }
+        },
 
         Commands::Auth { auth_command } => handle_auth_command(auth_command, &config).await,
 
