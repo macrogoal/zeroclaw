@@ -1,4 +1,4 @@
-//! Append-only JSONL transcript of assistant finals (Phase 5 roadmap slice).
+//! Append-only JSONL transcript of user and assistant lines (Phase 5 roadmap slice).
 
 use crate::config::SessionTranscriptConfig;
 use serde::Serialize;
@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 pub struct TranscriptRecordV1 {
     pub v: u32,
     pub ts: String,
-    pub role: &'static str,
+    /// `"user"` or `"assistant"`.
+    pub role: String,
     pub channel: String,
     pub provider: String,
     pub model: String,
@@ -72,10 +73,10 @@ fn maybe_truncate_content(s: &str, max_chars: usize) -> String {
     format!("{head}\n… [truncated: {n} chars > {max_chars}]\n")
 }
 
-/// Append one assistant line when `cfg.enabled` and paths succeed.
-pub(crate) fn append_assistant_for_config(
+fn append_transcript_line_for_config(
     cfg: &SessionTranscriptConfig,
     session_key: &str,
+    role: &str,
     channel: &str,
     provider: &str,
     model: &str,
@@ -92,7 +93,7 @@ pub(crate) fn append_assistant_for_config(
     let record = TranscriptRecordV1 {
         v: 1,
         ts: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        role: "assistant",
+        role: role.to_string(),
         channel: channel.to_string(),
         provider: provider.to_string(),
         model: model.to_string(),
@@ -101,6 +102,38 @@ pub(crate) fn append_assistant_for_config(
     if let Err(e) = append_record_jsonl(&base, session_key, &record) {
         tracing::warn!(error = %e, "session transcript append failed");
     }
+}
+
+/// Append one user line when `cfg.enabled` and paths succeed.
+pub(crate) fn append_user_for_config(
+    cfg: &SessionTranscriptConfig,
+    session_key: &str,
+    channel: &str,
+    provider: &str,
+    model: &str,
+    text: &str,
+) {
+    append_transcript_line_for_config(cfg, session_key, "user", channel, provider, model, text);
+}
+
+/// Append one assistant line when `cfg.enabled` and paths succeed.
+pub(crate) fn append_assistant_for_config(
+    cfg: &SessionTranscriptConfig,
+    session_key: &str,
+    channel: &str,
+    provider: &str,
+    model: &str,
+    text: &str,
+) {
+    append_transcript_line_for_config(
+        cfg,
+        session_key,
+        "assistant",
+        channel,
+        provider,
+        model,
+        text,
+    );
 }
 
 fn append_record_jsonl(
@@ -160,7 +193,7 @@ mod tests {
         let record = TranscriptRecordV1 {
             v: 1,
             ts: "2020-01-01T00:00:00Z".to_string(),
-            role: "assistant",
+            role: "assistant".into(),
             channel: "c".into(),
             provider: "p".into(),
             model: "m".into(),

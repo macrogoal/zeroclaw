@@ -4080,6 +4080,18 @@ pub async fn run(
             &effective_msg,
         );
 
+        let transcript_session_key = memory_session_id
+            .clone()
+            .unwrap_or_else(|| format!("{channel_name}:nosession"));
+        crate::agent::session_transcript::append_user_for_config(
+            &config.agent.session_transcript,
+            &transcript_session_key,
+            channel_name,
+            &provider_name,
+            &model_name,
+            &effective_msg,
+        );
+
         #[allow(unused_assignments)]
         let mut response = String::new();
         loop {
@@ -4087,9 +4099,7 @@ pub async fn run(
                 .scope(
                     Some(crate::agent::session_transcript::SessionTranscriptScope {
                         cfg: config.agent.session_transcript.clone(),
-                        session_key: memory_session_id
-                            .clone()
-                            .unwrap_or_else(|| format!("{channel_name}:nosession")),
+                        session_key: transcript_session_key.clone(),
                     }),
                     run_tool_call_loop(
                         provider.as_ref(),
@@ -4352,14 +4362,24 @@ pub async fn run(
                 &effective_input,
             );
 
+            let transcript_session_key = memory_session_id
+                .clone()
+                .unwrap_or_else(|| format!("{channel_name}:nosession"));
+            crate::agent::session_transcript::append_user_for_config(
+                &config.agent.session_transcript,
+                &transcript_session_key,
+                channel_name,
+                &provider_name,
+                &model_name,
+                &effective_input,
+            );
+
             let response = loop {
                 match crate::agent::session_transcript::SESSION_TRANSCRIPT_CONTEXT
                     .scope(
                         Some(crate::agent::session_transcript::SessionTranscriptScope {
                             cfg: config.agent.session_transcript.clone(),
-                            session_key: memory_session_id
-                                .clone()
-                                .unwrap_or_else(|| format!("{channel_name}:nosession")),
+                            session_key: transcript_session_key.clone(),
                         }),
                         run_tool_call_loop(
                             provider.as_ref(),
@@ -4815,6 +4835,14 @@ pub async fn process_message(
     let transcript_key = session_id
         .map(String::from)
         .unwrap_or_else(|| "daemon:none".to_string());
+    crate::agent::session_transcript::append_user_for_config(
+        &config.agent.session_transcript,
+        &transcript_key,
+        "daemon",
+        provider_name,
+        &model_name,
+        &effective_message,
+    );
     crate::agent::session_transcript::SESSION_TRANSCRIPT_CONTEXT
         .scope(
             Some(crate::agent::session_transcript::SessionTranscriptScope {

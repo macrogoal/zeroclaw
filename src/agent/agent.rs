@@ -341,6 +341,17 @@ impl Agent {
         self.memory_session_id = session_id;
     }
 
+    fn append_user_session_transcript(&self, channel: &str, model: &str, text: &str) {
+        crate::agent::session_transcript::append_user_for_config(
+            &self.config.session_transcript,
+            self.memory_session_id.as_deref().unwrap_or(""),
+            channel,
+            &self.provider_label,
+            model,
+            text,
+        );
+    }
+
     fn append_session_transcript(&self, channel: &str, model: &str, text: &str) {
         crate::agent::session_transcript::append_assistant_for_config(
             &self.config.session_transcript,
@@ -773,6 +784,7 @@ impl Agent {
             .push(ConversationMessage::Chat(ChatMessage::user(enriched)));
 
         let effective_model = self.classify_model(user_message);
+        self.append_user_session_transcript("gateway", &effective_model, user_message);
 
         for _ in 0..self.config.max_tool_iterations {
             let messages = self.tool_dispatcher.to_provider_messages(&self.history);
@@ -949,6 +961,7 @@ impl Agent {
             .push(ConversationMessage::Chat(ChatMessage::user(enriched)));
 
         let effective_model = self.classify_model(user_message);
+        self.append_user_session_transcript("gateway", &effective_model, user_message);
 
         // ── Turn loop ──────────────────────────────────────────────────
         for _ in 0..self.config.max_tool_iterations {

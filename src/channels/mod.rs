@@ -2696,6 +2696,14 @@ async fn process_channel_message(
     #[allow(clippy::cast_possible_truncation)]
     let elapsed_before_llm_ms = started_at.elapsed().as_millis() as u64;
     tracing::info!(elapsed_before_llm_ms, "⏱ Starting LLM call");
+    crate::agent::session_transcript::append_user_for_config(
+        &ctx.prompt_config.agent.session_transcript,
+        &conversation_history_key(&msg),
+        msg.channel.as_str(),
+        route.provider.as_str(),
+        route.model.as_str(),
+        &msg.content,
+    );
     let llm_result = loop {
         let loop_result = tokio::select! {
             () = cancellation_token.cancelled() => LlmExecutionResult::Cancelled,

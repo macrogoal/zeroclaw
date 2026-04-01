@@ -1,6 +1,8 @@
 //! [`ContextAssembler`] builds optional dynamic context for the agent loop (Phase 0–1).
 
-use super::fingerprint::{compute_fingerprint, git_head_sha, instruction_files_with_mtime};
+use super::fingerprint::{
+    compute_fingerprint, git_head_sha, instruction_files_with_mtime, ContextFingerprint,
+};
 use super::git_snapshot::{capture_git_snapshot, GitSnapshot};
 use super::layers::collect_layered_instruction_paths;
 use anyhow::Result;
@@ -52,8 +54,10 @@ pub trait ContextAssembler: Send + Sync {
 #[derive(Debug, Default, Clone, Copy)]
 pub struct DefaultContextAssembler;
 
-impl ContextAssembler for DefaultContextAssembler {
-    fn assemble(&self, input: &ContextAssemblyInput) -> Result<AssembledContext> {
+impl DefaultContextAssembler {
+    /// Instruction-file mtimes + git HEAD — **no** `git log` / snapshot work.
+    #[must_use]
+    pub fn fingerprint_only(self, input: &ContextAssemblyInput) -> ContextFingerprint {
         let layered = collect_layered_instruction_paths(
             input.global_config_dir.as_deref(),
             input.user_config_dir.as_deref(),
@@ -63,7 +67,13 @@ impl ContextAssembler for DefaultContextAssembler {
         let unique_paths: Vec<PathBuf> = layered.into_iter().map(|(_, p)| p).collect();
         let with_mtime = instruction_files_with_mtime(&unique_paths);
         let head = git_head_sha(&input.workspace);
-        let fingerprint = compute_fingerprint(&with_mtime, head.as_deref());
+        compute_fingerprint(&with_mtime, head.as_deref())
+    }
+}
+
+impl ContextAssembler for DefaultContextAssembler {
+    fn assemble(&self, input: &ContextAssemblyInput) -> Result<AssembledContext> {
+        let fingerprint = self.fingerprint_only(input);
 
         if !input.options.enabled {
             return Ok(AssembledContext {
