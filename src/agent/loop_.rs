@@ -342,6 +342,13 @@ const COMPACTION_MAX_SOURCE_CHARS: usize = 12_000;
 /// Max characters retained in stored compaction summary.
 const COMPACTION_MAX_SUMMARY_CHARS: usize = 2_000;
 
+/// Result of [`auto_compact_history`] for Phase 5 archive + metadata wiring.
+pub(crate) struct CompactionOutcome {
+    pub did_compact: bool,
+    pub archive_rel_path: Option<String>,
+    pub summary_excerpt: Option<String>,
+}
+
 /// Estimate token count for a message history using ~4 chars/token heuristic.
 /// Includes a small overhead per message for role/framing tokens.
 fn estimate_history_tokens(history: &[ChatMessage]) -> usize {
@@ -461,7 +468,7 @@ async fn auto_compact_history(
     model: &str,
     max_history: usize,
     max_context_tokens: usize,
-) -> Result<bool> {
+) -> Result<CompactionOutcome> {
     let has_system = history.first().map_or(false, |m| m.role == "system");
     let non_system_count = if has_system {
         history.len().saturating_sub(1)
@@ -473,14 +480,22 @@ async fn auto_compact_history(
 
     // Trigger compaction when either token budget OR message count is exceeded.
     if estimated_tokens <= max_context_tokens && non_system_count <= max_history {
-        return Ok(false);
+        return Ok(CompactionOutcome {
+            did_compact: false,
+            archive_rel_path: None,
+            summary_excerpt: None,
+        });
     }
 
     let start = if has_system { 1 } else { 0 };
     let keep_recent = COMPACTION_KEEP_RECENT_MESSAGES.min(non_system_count);
     let compact_count = non_system_count.saturating_sub(keep_recent);
     if compact_count == 0 {
-        return Ok(false);
+        return Ok(CompactionOutcome {
+            did_compact: false,
+            archive_rel_path: None,
+            summary_excerpt: None,
+        });
     }
 
     let mut compact_end = start + compact_count;
@@ -490,10 +505,22 @@ async fn auto_compact_history(
         compact_end -= 1;
     }
     if compact_end <= start {
-        return Ok(false);
+        return Ok(CompactionOutcome {
+            did_compact: false,
+            archive_rel_path: None,
+            summary_excerpt: None,
+        });
     }
 
     let to_compact: Vec<ChatMessage> = history[start..compact_end].to_vec();
+    let archive_rel_path = match crate::agent::session_record::write_compaction_archive(&to_compact)
+    {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(error = %e, "compaction archive write failed");
+            None
+        }
+    };
     let transcript = build_compaction_transcript(&to_compact);
 
     let summarizer_system = "You are a conversation compaction engine. Summarize older chat history into concise context for future turns. Preserve: user preferences, commitments, decisions, unresolved tasks, key facts. Omit: filler, repeated chit-chat, verbose tool logs. Output plain text bullet points only.";
@@ -512,50 +539,33 @@ async fn auto_compact_history(
         });
 
     let summary = truncate_with_ellipsis(&summary_raw, COMPACTION_MAX_SUMMARY_CHARS);
+    let excerpt = summary.chars().take(240).collect::<String>();
     apply_compaction_summary(history, start, compact_end, &summary);
 
-    Ok(true)
+    Ok(CompactionOutcome {
+        did_compact: true,
+        archive_rel_path,
+        summary_excerpt: Some(excerpt),
+    })
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct InteractiveSessionState {
-    version: u32,
-    history: Vec<ChatMessage>,
-}
-
-impl InteractiveSessionState {
-    fn from_history(history: &[ChatMessage]) -> Self {
-        Self {
-            version: 1,
+fn save_interactive_session_history(
+    path: &Path,
+    history: &[ChatMessage],
+    compaction: &crate::agent::session_record::SessionCompactionMeta,
+) -> Result<()> {
+    crate::agent::session_record::save_session_record(
+        path,
+        &crate::agent::session_record::SessionRecord {
+            version: crate::agent::session_record::SESSION_RECORD_VERSION,
             history: history.to_vec(),
-        }
-    }
+            compaction: Some(compaction.clone()),
+        },
+    )
 }
 
 fn load_interactive_session_history(path: &Path, system_prompt: &str) -> Result<Vec<ChatMessage>> {
-    if !path.exists() {
-        return Ok(vec![ChatMessage::system(system_prompt)]);
-    }
-
-    let raw = std::fs::read_to_string(path)?;
-    let mut state: InteractiveSessionState = serde_json::from_str(&raw)?;
-    if state.history.is_empty() {
-        state.history.push(ChatMessage::system(system_prompt));
-    } else if state.history.first().map(|msg| msg.role.as_str()) != Some("system") {
-        state.history.insert(0, ChatMessage::system(system_prompt));
-    }
-
-    Ok(state.history)
-}
-
-fn save_interactive_session_history(path: &Path, history: &[ChatMessage]) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    let payload = serde_json::to_string_pretty(&InteractiveSessionState::from_history(history))?;
-    std::fs::write(path, payload)?;
-    Ok(())
+    Ok(crate::agent::session_record::load_session_record(path, system_prompt)?.history)
 }
 
 /// Build context preamble by searching memory for relevant entries.
@@ -4197,11 +4207,15 @@ pub async fn run(
         println!("Type /help for commands.\n");
         let cli = crate::channels::CliChannel::new();
 
-        // Persistent conversation history across turns
-        let mut history = if let Some(path) = session_state_file.as_deref() {
-            load_interactive_session_history(path, &system_prompt)?
+        // Persistent conversation history across turns (v2 session record + compaction metadata).
+        let (mut history, mut compaction_meta) = if let Some(path) = session_state_file.as_deref() {
+            let r = crate::agent::session_record::load_session_record(path, &system_prompt)?;
+            (r.history, r.compaction.unwrap_or_default())
         } else {
-            vec![ChatMessage::system(&system_prompt)]
+            (
+                vec![ChatMessage::system(&system_prompt)],
+                crate::agent::session_record::SessionCompactionMeta::default(),
+            )
         };
 
         loop {
@@ -4262,6 +4276,8 @@ pub async fn run(
 
                     history.clear();
                     history.push(ChatMessage::system(&system_prompt));
+                    compaction_meta =
+                        crate::agent::session_record::SessionCompactionMeta::default();
                     // Clear conversation and daily memory
                     let mut cleared = 0;
                     for category in [MemoryCategory::Conversation, MemoryCategory::Daily] {
@@ -4278,7 +4294,7 @@ pub async fn run(
                         println!("Conversation cleared.\n");
                     }
                     if let Some(path) = session_state_file.as_deref() {
-                        save_interactive_session_history(path, &history)?;
+                        save_interactive_session_history(path, &history, &compaction_meta)?;
                     }
                     continue;
                 }
@@ -4458,7 +4474,7 @@ pub async fn run(
             observer.record_event(&ObserverEvent::TurnComplete);
 
             // Auto-compaction before hard trimming to preserve long-context signal.
-            if let Ok(compacted) = auto_compact_history(
+            if let Ok(outcome) = auto_compact_history(
                 &mut history,
                 provider.as_ref(),
                 &model_name,
@@ -4467,7 +4483,11 @@ pub async fn run(
             )
             .await
             {
-                if compacted {
+                if outcome.did_compact {
+                    if let Some(p) = outcome.archive_rel_path {
+                        compaction_meta.archive_paths.push(p);
+                    }
+                    compaction_meta.last_summary_excerpt = outcome.summary_excerpt;
                     println!("🧹 Auto-compaction complete");
                 }
             }
@@ -4485,7 +4505,7 @@ pub async fn run(
             }
 
             if let Some(path) = session_state_file.as_deref() {
-                save_interactive_session_history(path, &history)?;
+                save_interactive_session_history(path, &history, &compaction_meta)?;
             }
         }
     }
@@ -4876,8 +4896,9 @@ pub async fn process_message(
 mod tests {
     use super::{
         apply_compaction_summary, build_compaction_transcript, load_interactive_session_history,
-        save_interactive_session_history, InteractiveSessionState,
+        save_interactive_session_history,
     };
+    use crate::agent::session_record::SessionCompactionMeta;
     use crate::providers::ChatMessage;
     use tempfile::tempdir;
 
@@ -4891,7 +4912,8 @@ mod tests {
             ChatMessage::assistant("hi"),
         ];
 
-        save_interactive_session_history(&path, &history).unwrap();
+        save_interactive_session_history(&path, &history, &SessionCompactionMeta::default())
+            .unwrap();
         let restored = load_interactive_session_history(&path, "fallback").unwrap();
 
         assert_eq!(restored.len(), 3);
@@ -4904,11 +4926,7 @@ mod tests {
     fn interactive_session_state_adds_missing_system_prompt() {
         let dir = tempdir().unwrap();
         let path = dir.path().join("session.json");
-        let payload = serde_json::to_string_pretty(&InteractiveSessionState {
-            version: 1,
-            history: vec![ChatMessage::user("orphan")],
-        })
-        .unwrap();
+        let payload = r#"{"version":1,"history":[{"role":"user","content":"orphan"}]}"#.to_string();
         std::fs::write(&path, payload).unwrap();
 
         let restored = load_interactive_session_history(&path, "fallback system").unwrap();

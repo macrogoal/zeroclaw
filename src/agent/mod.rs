@@ -9,6 +9,7 @@ pub mod loop_;
 pub mod loop_detector;
 pub mod memory_loader;
 pub mod prompt;
+pub mod session_record;
 pub mod session_transcript;
 pub mod thinking;
 pub mod tool_result_offload;
