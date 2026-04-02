@@ -2,7 +2,7 @@
 
 This is a high-signal reference for common config sections and defaults.
 
-Last verified: **February 21, 2026**.
+Last verified: **April 2, 2026**.
 
 Config path resolution at startup:
 
@@ -83,6 +83,7 @@ Operational note for container users:
 | `tool_dispatcher` | `auto` | Tool dispatch strategy |
 | `tool_call_dedup_exempt` | `[]` | Tool names exempt from within-turn duplicate-call suppression |
 | `tool_filter_groups` | `[]` | Per-turn MCP tool schema filter groups (see below) |
+| `tool_router` | _disabled_ | Optional small-model router that narrows visible tools per user message (see `[agent.tool_router]`) |
 
 Notes:
 
@@ -120,6 +121,45 @@ tools = ["mcp_vikunja_*"]
 mode = "dynamic"
 tools = ["mcp_browser_*"]
 keywords = ["browse", "navigate", "open url", "screenshot"]
+```
+
+### `[agent.tool_router]`
+
+Optional **dynamic tool router**: before each user message is sent to the main LLM, ZeroClaw can call a fast OpenAI-compatible chat endpoint that returns a JSON array of tool names to **keep** in the tool schema for that turn. Every other registered tool (that is not already excluded by `[agent.tool_filter_groups]` or channel autonomy rules) is **hidden** from the main model for that turn, reducing prompt and native-tool payload size.
+
+This is complementary to `tool_filter_groups` (keyword/glob MCP filtering) and to MCP deferred loading: when `mcp.deferred_loading` is enabled, `tool_search` is automatically kept in the allowed set whenever it is present among the candidate tools, so the model can still discover deferred MCP tools.
+
+| Key | Default | Purpose |
+|---|---|---|
+| `enabled` | `false` | When `true`, run the router before the main LLM for each user turn |
+| `base_url` | `""` | OpenAI-compatible API base (e.g. `http://127.0.0.1:11437/v1`); must be set when enabled |
+| `model` | `""` | Router model id; must be set when enabled |
+| `max_tools` | `10` | Maximum number of tools the main LLM may see **after** mandatory inclusions (`always_include`, and `tool_search` when deferred MCP applies) |
+| `temperature` | `0.1` | Sampling temperature for the router request |
+| `timeout_ms` | `800` | HTTP timeout for the router request |
+| `fallback_to_all_tools` | `true` | On router failure, empty JSON array `[]`, or unparseable output, skip router exclusions and show all candidate tools |
+| `api_key` | _none_ | Optional bearer token for the router endpoint (`Authorization: Bearer`) |
+| `always_include` | `[]` | Tool names always exposed when routing is active (e.g. `memory_recall`) |
+
+Notes:
+
+- Router traffic uses the same HTTP proxy behavior as other outbound clients (`agent.tool_router` service key).
+- When `fallback_to_all_tools = false` and the router returns a successful but **empty** array, all candidate tools are excluded for that turn (strict mode); transport/parse failures still fall back to showing all candidates to avoid a broken agent.
+- The delegate sub-agent path does not apply `tool_router` today.
+
+Example (local small model as router, main model unchanged):
+
+```toml
+[agent.tool_router]
+enabled = true
+base_url = "http://127.0.0.1:11437/v1"
+model = "Qwen_Qwen3-4B-Instruct-2507"
+max_tools = 10
+temperature = 0.1
+timeout_ms = 800
+fallback_to_all_tools = true
+# always_include = ["memory_recall"]
+# api_key = "sk-..."  # if your router requires auth
 ```
 
 ## `[pacing]`

@@ -53,7 +53,7 @@ Rust-implemented tools are wired in [`all_tools_with_runtime`](../../src/tools/m
 
 **Drift warning:** New releases may add or gate tools. Confirm in source or by inspecting the live tool list (for example [`zeroclaw mcp serve`](../mcp-serve.md) and JSON-RPC `tools/list` for an allowlisted surface).
 
-**Agent loop:** [`[agent]`](../reference/api/config-reference.md) keys include `max_tool_iterations`, `parallel_tools`, `tool_call_dedup_exempt`, and **`tool_filter_groups`** (applies to **MCP-provided** tool schemas, not these built-in names).
+**Agent loop:** [`[agent]`](../reference/api/config-reference.md) keys include `max_tool_iterations`, `parallel_tools`, `tool_call_dedup_exempt`, **`tool_filter_groups`** (MCP tool schemas), and optional **`[agent.tool_router]`** (small model narrows visible tools per user message).
 
 Extending the codebase: [`change-playbooks.md`](../contributing/change-playbooks.md) (“Adding a Tool”).
 

@@ -2,7 +2,7 @@
 
 Các mục cấu hình thường dùng và giá trị mặc định.
 
-Xác minh lần cuối: **2026-02-19**.
+Xác minh lần cuối: **2026-04-02**.
 
 Thứ tự tìm config khi khởi động:
 
@@ -71,6 +71,7 @@ Lưu ý cho người dùng container:
 | `parallel_tools` | `false` | Bật thực thi tool song song trong một lượt |
 | `tool_dispatcher` | `auto` | Chiến lược dispatch tool |
 | `tool_call_dedup_exempt` | `[]` | Tên tool được miễn kiểm tra trùng lặp trong cùng một lượt |
+| `tool_router` | _tắt_ | Model nhỏ tùy chọn để thu hẹp tool hiển thị mỗi tin nhắn (xem `[agent.tool_router]`) |
 
 Lưu ý:
 
@@ -79,6 +80,45 @@ Lưu ý:
 - Trong vòng lặp tool của CLI, gateway và channel, các lời gọi tool độc lập được thực thi đồng thời mặc định khi không cần phê duyệt; thứ tự kết quả giữ ổn định.
 - `parallel_tools` áp dụng cho API `Agent::turn()`. Không ảnh hưởng đến vòng lặp runtime của CLI, gateway hay channel.
 - `tool_call_dedup_exempt` nhận mảng tên tool chính xác. Các tool trong danh sách được phép gọi nhiều lần với cùng tham số trong một lượt. Ví dụ: `tool_call_dedup_exempt = ["browser"]`.
+
+### `[agent.tool_router]`
+
+**Bộ định tuyến tool động** (tùy chọn): trước khi tin nhắn người dùng gửi tới model chính, ZeroClaw có thể gọi endpoint chat tương thích OpenAI trả về mảng JSON các tên tool cần **giữ** trong schema tool cho lượt đó. Mọi tool đã đăng ký khác (vẫn nằm trong tập ứng viên sau `[agent.tool_filter_groups]` và quy tắc autonomy trên channel) sẽ **ẩn** khỏi model chính trong lượt đó, giảm kích thước prompt và payload tool gốc.
+
+Bổ sung cho `tool_filter_groups` và tải MCP trì hoãn: khi `mcp.deferred_loading` bật, nếu có `tool_search` trong ứng viên thì router luôn giữ lại để model vẫn có thể kích hoạt tool MCP trì hoãn.
+
+| Khóa | Mặc định | Mục đích |
+|---|---|---|
+| `enabled` | `false` | `true`: chạy router trước model chính mỗi lượt người dùng |
+| `base_url` | `""` | Base API tương thích OpenAI (ví dụ `http://127.0.0.1:11437/v1`); bắt buộc khi bật |
+| `model` | `""` | ID model cho router; bắt buộc khi bật |
+| `max_tools` | `10` | Số tool tối đa model chính thấy **sau** các mục bắt buộc (`always_include`, và `tool_search` khi dùng MCP trì hoãn) |
+| `temperature` | `0.1` | Nhiệt độ cho request router |
+| `timeout_ms` | `800` | Timeout HTTP cho router |
+| `fallback_to_all_tools` | `true` | Khi router lỗi, mảng rỗng `[]`, hoặc không parse được: bỏ qua loại trừ của router và hiển thị mọi tool ứng viên |
+| `api_key` | _không_ | Bearer tùy chọn (`Authorization: Bearer`) |
+| `always_include` | `[]` | Tên tool luôn hiển thị khi bật định tuyến (ví dụ `memory_recall`) |
+
+Lưu ý:
+
+- HTTP client của router dùng cùng cấu hình proxy với client ra ngoài khác (khóa dịch vụ `agent.tool_router`).
+- Khi `fallback_to_all_tools = false` và router trả về **thành công** mảng rỗng, mọi tool ứng viên bị loại trong lượt đó (chế độ chặt); lỗi truyền tải/phân tích vẫn quay về hiển thị đầy đủ ứng viên.
+- Luồng sub-agent `delegate` hiện **không** áp dụng `tool_router`.
+
+Ví dụ:
+
+```toml
+[agent.tool_router]
+enabled = true
+base_url = "http://127.0.0.1:11437/v1"
+model = "Qwen_Qwen3-4B-Instruct-2507"
+max_tools = 10
+temperature = 0.1
+timeout_ms = 800
+fallback_to_all_tools = true
+# always_include = ["memory_recall"]
+# api_key = "sk-..."
+```
 
 ## `[agents.<name>]`
 
