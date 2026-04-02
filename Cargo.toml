@@ -109,6 +109,10 @@ chacha20poly1305 = "0.10"
 hmac = "0.12"
 sha2 = "0.10"
 hex = "0.4"
+# MD5 for WeChat iLink CDN parameter hashing (0.8.0 already in Cargo.lock)
+md5 = "0.8"
+# AES-128-ECB for WeChat iLink media CDN encryption (0.8.4 already in Cargo.lock)
+aes = "0.8"
 
 # CSPRNG for secure token generation
 rand = "0.10"

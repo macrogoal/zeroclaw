@@ -6013,6 +6013,8 @@ pub struct ChannelsConfig {
     pub dingtalk: Option<DingTalkConfig>,
     /// WeCom (WeChat Enterprise) Bot Webhook channel configuration.
     pub wecom: Option<WeComConfig>,
+    /// Personal WeChat (iLink Bot) channel configuration.
+    pub weixin: Option<WeXinConfig>,
     /// QQ Official Bot channel configuration.
     pub qq: Option<QQConfig>,
     /// X/Twitter channel configuration.
@@ -6207,6 +6209,7 @@ impl Default for ChannelsConfig {
             feishu: None,
             dingtalk: None,
             wecom: None,
+            weixin: None,
             qq: None,
             twitter: None,
             mochat: None,
@@ -7386,6 +7389,48 @@ impl ChannelConfig for WeComConfig {
     }
     fn desc() -> &'static str {
         "WeCom Bot Webhook"
+    }
+}
+
+/// Personal WeChat (iLink Bot) channel configuration.
+///
+/// Uses Tencent's official iLink Bot Protocol. Token is obtained via
+/// QR code OAuth using OpenClaw's `@tencent-weixin/openclaw-weixin` plugin:
+/// ```bash
+/// openclaw channels login --channel openclaw-weixin
+/// # Then copy bot_token from ~/.openclaw/credentials/openclaw-weixin.json
+/// ```
+///
+/// Supports: text, image, voice, file, video messages.
+/// Does NOT support group chats (iLink Bot API limitation).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct WeXinConfig {
+    /// iLink Bot Bearer Token.
+    /// Obtain via: `openclaw channels login --channel openclaw-weixin`
+    pub bot_token: String,
+    /// Allowed WeChat user IDs (wxuin). Empty = deny all, "*" = allow all.
+    #[serde(default)]
+    pub allowed_users: Vec<String>,
+    /// Long-poll timeout in milliseconds (default: 35000).
+    /// Tencent's server will hold the connection for up to this long.
+    #[serde(default = "default_weixin_long_poll_timeout_ms")]
+    pub long_poll_timeout_ms: u64,
+    /// Per-channel proxy URL (http, https, socks5, socks5h).
+    /// Overrides the global `[proxy]` setting for this channel only.
+    #[serde(default)]
+    pub proxy_url: Option<String>,
+}
+
+fn default_weixin_long_poll_timeout_ms() -> u64 {
+    35_000
+}
+
+impl ChannelConfig for WeXinConfig {
+    fn name() -> &'static str {
+        "WeChat iLink"
+    }
+    fn desc() -> &'static str {
+        "Personal WeChat via iLink Bot API (Tencent official)"
     }
 }
 
@@ -8958,6 +9003,13 @@ impl Config {
                     "config.channels_config.wecom.webhook_key",
                 )?;
             }
+            if let Some(ref mut wx) = config.channels_config.weixin {
+                decrypt_secret(
+                    &store,
+                    &mut wx.bot_token,
+                    "config.channels_config.weixin.bot_token",
+                )?;
+            }
             if let Some(ref mut qq) = config.channels_config.qq {
                 decrypt_secret(
                     &store,
@@ -10406,6 +10458,13 @@ impl Config {
                 "config.channels_config.wecom.webhook_key",
             )?;
         }
+        if let Some(ref mut wx) = config_to_save.channels_config.weixin {
+            encrypt_secret(
+                &store,
+                &mut wx.bot_token,
+                "config.channels_config.weixin.bot_token",
+            )?;
+        }
         if let Some(ref mut qq) = config_to_save.channels_config.qq {
             encrypt_secret(
                 &store,
@@ -11053,6 +11112,7 @@ default_temperature = 0.7
                 feishu: None,
                 dingtalk: None,
                 wecom: None,
+                weixin: None,
                 qq: None,
                 twitter: None,
                 mochat: None,
@@ -12062,6 +12122,7 @@ allowed_users = ["@ops:matrix.org"]
             feishu: None,
             dingtalk: None,
             wecom: None,
+            weixin: None,
             qq: None,
             twitter: None,
             mochat: None,
@@ -12385,6 +12446,7 @@ channel_id = "C123"
             feishu: None,
             dingtalk: None,
             wecom: None,
+            weixin: None,
             qq: None,
             twitter: None,
             mochat: None,

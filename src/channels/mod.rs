@@ -54,6 +54,7 @@ pub mod voice_wake;
 pub mod wati;
 pub mod webhook;
 pub mod wecom;
+pub mod weixin;
 pub mod whatsapp;
 #[cfg(feature = "whatsapp-web")]
 pub mod whatsapp_storage;
@@ -95,6 +96,7 @@ pub use voice_wake::VoiceWakeChannel;
 pub use wati::WatiChannel;
 pub use webhook::WebhookChannel;
 pub use wecom::WeComChannel;
+pub use weixin::WeXinChannel;
 pub use whatsapp::WhatsAppChannel;
 #[cfg(feature = "whatsapp-web")]
 pub use whatsapp_web::WhatsAppWebChannel;
@@ -4440,6 +4442,17 @@ fn collect_configured_channels(
             channel: Arc::new(WeComChannel::new(
                 wc.webhook_key.clone(),
                 wc.allowed_users.clone(),
+            )),
+        });
+    }
+
+    if let Some(ref wx) = config.channels_config.weixin {
+        channels.push(ConfiguredChannel {
+            display_name: "WeChat",
+            channel: Arc::new(WeXinChannel::new(
+                wx.bot_token.clone(),
+                wx.allowed_users.clone(),
+                wx.long_poll_timeout_ms,
             )),
         });
     }
