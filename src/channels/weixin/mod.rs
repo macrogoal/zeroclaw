@@ -33,6 +33,7 @@
 
 mod api;
 pub mod crypto;
+pub mod auth;
 
 use super::media_pipeline::MediaAttachment;
 use super::traits::{Channel, ChannelMessage, SendMessage};
