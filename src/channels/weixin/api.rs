@@ -164,6 +164,34 @@ impl MessageItem {
         }
     }
 
+    /// Construct a file message item for outbound messages
+    pub fn file(encrypt_query_param: impl Into<String>, aes_key: impl Into<String>) -> Self {
+        Self::File {
+            file_item: FileItem {
+                encrypt_query_param: Some(encrypt_query_param.into()),
+                aes_key: Some(aes_key.into()),
+            },
+        }
+    }
+
+    /// Construct a video message item for outbound messages
+    pub fn video(
+        encrypt_query_param: impl Into<String>,
+        aes_key: impl Into<String>,
+        thumb_param: Option<(String, String)>,
+    ) -> Self {
+        Self::Video {
+            video_item: VideoItem {
+                encrypt_query_param: Some(encrypt_query_param.into()),
+                aes_key: Some(aes_key.into()),
+                thumb: thumb_param.map(|(param, key)| ImageItem {
+                    encrypt_query_param: Some(param),
+                    aes_key: Some(key),
+                }),
+            },
+        }
+    }
+
     /// Returns true if this is a text item
     pub fn is_text(&self) -> bool {
         matches!(self, Self::Text { .. })
