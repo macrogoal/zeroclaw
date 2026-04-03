@@ -1279,7 +1279,9 @@ pub async fn handle_api_sessions_list(
     let gw_sessions: Vec<serde_json::Value> = all_metadata
         .into_iter()
         .filter_map(|meta| {
-            let session_id = meta.key.strip_prefix("gw_")?;
+            let session_id = meta
+                .key
+                .strip_prefix(crate::agent::session_record::GATEWAY_SESSION_PREFIX)?;
             let mut entry = serde_json::json!({
                 "session_id": session_id,
                 "created_at": meta.created_at.to_rfc3339(),
@@ -1314,7 +1316,7 @@ pub async fn handle_api_session_delete(
             .into_response();
     };
 
-    let session_key = format!("gw_{id}");
+    let session_key = crate::agent::session_record::gateway_backend_key(&id);
     match backend.delete_session(&session_key) {
         Ok(true) => Json(serde_json::json!({"deleted": true, "session_id": id})).into_response(),
         Ok(false) => (
@@ -1358,7 +1360,7 @@ pub async fn handle_api_session_rename(
             .into_response();
     }
 
-    let session_key = format!("gw_{id}");
+    let session_key = crate::agent::session_record::gateway_backend_key(&id);
 
     // Verify the session exists before renaming
     let sessions = backend.list_sessions();

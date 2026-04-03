@@ -1390,10 +1390,73 @@ impl Default for ToolResultOffloadConfig {
     }
 }
 
+fn default_tool_router_max_tools() -> usize {
+    10
+}
+
+fn default_tool_router_temperature() -> f64 {
+    0.1
+}
+
+fn default_tool_router_timeout_ms() -> u64 {
+    800
+}
+
+fn default_tool_router_fallback() -> bool {
+    true
+}
+
+/// Fast OpenAI-compatible model that narrows the tool list before the main LLM (`[agent.tool_router]`).
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ToolRouterConfig {
+    /// When true, call `base_url` with `model` to pick a subset of tools for each user turn.
+    #[serde(default)]
+    pub enabled: bool,
+    /// OpenAI-compatible API base (e.g. `http://127.0.0.1:11437/v1`).
+    #[serde(default)]
+    pub base_url: String,
+    /// Router model id.
+    #[serde(default)]
+    pub model: String,
+    /// Maximum tools the router may select (mandatory tools do not count against this cap).
+    #[serde(default = "default_tool_router_max_tools")]
+    pub max_tools: usize,
+    #[serde(default = "default_tool_router_temperature")]
+    pub temperature: f64,
+    /// HTTP timeout for the router request.
+    #[serde(default = "default_tool_router_timeout_ms")]
+    pub timeout_ms: u64,
+    /// When true, keep all tools if the router errors or returns an empty selection.
+    #[serde(default = "default_tool_router_fallback")]
+    pub fallback_to_all_tools: bool,
+    /// Optional bearer token for the router endpoint.
+    #[serde(default)]
+    pub api_key: Option<String>,
+    /// Tool names always exposed to the main LLM when routing is active (e.g. `tool_search` for deferred MCP).
+    #[serde(default)]
+    pub always_include: Vec<String>,
+}
+
+impl Default for ToolRouterConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            base_url: String::new(),
+            model: String::new(),
+            max_tools: default_tool_router_max_tools(),
+            temperature: default_tool_router_temperature(),
+            timeout_ms: default_tool_router_timeout_ms(),
+            fallback_to_all_tools: default_tool_router_fallback(),
+            api_key: None,
+            always_include: Vec::new(),
+        }
+    }
+}
+
 /// Append user and assistant lines to `~/.zeroclaw/sessions/transcripts/*.jsonl` (`[agent.session_transcript]`).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, JsonSchema)]
 pub struct SessionTranscriptConfig {
-    /// When true, each completed assistant reply is appended as one JSON line per session key.
+    /// When true, append user and assistant lines to the session transcript JSONL (per session key).
     #[serde(default)]
     pub enabled: bool,
     /// Maximum Unicode characters stored per line (`0` = unlimited).
@@ -1470,9 +1533,18 @@ pub struct AgentConfig {
     #[serde(default)]
     pub tool_result_offload: ToolResultOffloadConfig,
 
-    /// Optional JSONL transcript of assistant replies (Phase 5 roadmap).
+    /// Optional JSONL transcript of user and assistant lines under `~/.zeroclaw/sessions/transcripts/`.
     #[serde(default)]
     pub session_transcript: SessionTranscriptConfig,
+
+    /// Delete compaction archives under `~/.zeroclaw/sessions/archives/` older than this many days.
+    /// `0` disables GC (default).
+    #[serde(default = "default_session_archive_retention_days")]
+    pub session_archive_retention_days: u32,
+
+    /// Optional per-turn tool routing via a small OpenAI-compatible model.
+    #[serde(default)]
+    pub tool_router: ToolRouterConfig,
 }
 
 fn default_agent_max_tool_iterations() -> usize {
@@ -1492,6 +1564,10 @@ fn default_agent_tool_dispatcher() -> String {
 }
 
 fn default_max_system_prompt_chars() -> usize {
+    0
+}
+
+fn default_session_archive_retention_days() -> u32 {
     0
 }
 
@@ -1515,6 +1591,8 @@ impl Default for AgentConfig {
             dynamic_context: DynamicContextConfig::default(),
             tool_result_offload: ToolResultOffloadConfig::default(),
             session_transcript: SessionTranscriptConfig::default(),
+            session_archive_retention_days: default_session_archive_retention_days(),
+            tool_router: ToolRouterConfig::default(),
         }
     }
 }

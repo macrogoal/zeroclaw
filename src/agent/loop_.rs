@@ -243,7 +243,7 @@ pub(crate) fn filter_by_allowed_tools(
 /// based on `tool_filter_groups` and the user message.
 ///
 /// Returns an empty `Vec` when `groups` is empty (no filtering).
-fn compute_excluded_mcp_tools(
+pub(crate) fn compute_excluded_mcp_tools(
     tools_registry: &[Box<dyn Tool>],
     groups: &[crate::config::schema::ToolFilterGroup],
     user_message: &str,
@@ -350,7 +350,7 @@ pub(crate) struct CompactionOutcome {
 
 /// Estimate token count for a message history using ~4 chars/token heuristic.
 /// Includes a small overhead per message for role/framing tokens.
-fn estimate_history_tokens(history: &[ChatMessage]) -> usize {
+pub(crate) fn estimate_history_tokens(history: &[ChatMessage]) -> usize {
     history
         .iter()
         .map(|m| {
@@ -408,15 +408,6 @@ fn autosave_memory_key(prefix: &str) -> String {
     format!("{prefix}_{}", Uuid::new_v4())
 }
 
-fn memory_session_id_from_state_file(path: &Path) -> Option<String> {
-    let raw = path.to_string_lossy().trim().to_string();
-    if raw.is_empty() {
-        return None;
-    }
-
-    Some(format!("cli:{raw}"))
-}
-
 /// Trim conversation history to prevent unbounded growth.
 /// Preserves the system prompt (first message if role=system) and the most recent messages.
 fn trim_history(history: &mut Vec<ChatMessage>, max_history: usize) {
@@ -461,7 +452,8 @@ fn apply_compaction_summary(
     history.splice(start..compact_end, std::iter::once(summary_msg));
 }
 
-async fn auto_compact_history(
+/// LLM-backed compaction + JSONL archive (Phase 5). Used by interactive sessions and channel/daemon paths.
+pub(crate) async fn auto_compact_history(
     history: &mut Vec<ChatMessage>,
     provider: &dyn Provider,
     model: &str,
@@ -475,10 +467,10 @@ async fn auto_compact_history(
         history.len()
     };
 
-    let estimated_tokens = estimate_history_tokens(history);
+    let estimated_tokens_before = estimate_history_tokens(history);
 
     // Trigger compaction when either token budget OR message count is exceeded.
-    if estimated_tokens <= max_context_tokens && non_system_count <= max_history {
+    if estimated_tokens_before <= max_context_tokens && non_system_count <= max_history {
         return Ok(CompactionOutcome {
             did_compact: false,
             archive_rel_path: None,
@@ -541,11 +533,34 @@ async fn auto_compact_history(
     let excerpt = summary.chars().take(240).collect::<String>();
     apply_compaction_summary(history, start, compact_end, &summary);
 
+    let estimated_tokens_after = estimate_history_tokens(history);
+    let non_system_after = if has_system {
+        history.len().saturating_sub(1)
+    } else {
+        history.len()
+    };
+    tracing::info!(
+        estimated_tokens_before,
+        estimated_tokens_after,
+        non_system_messages_before = non_system_count,
+        non_system_messages_after = non_system_after,
+        "Session history auto-compaction applied (Phase 5)"
+    );
+
     Ok(CompactionOutcome {
         did_compact: true,
         archive_rel_path,
         summary_excerpt: Some(excerpt),
     })
+}
+
+/// Keep only `user` / `assistant` messages in order (drops `system`, `tool`, etc.) for channel session cache.
+pub(crate) fn user_assistant_turns_for_channel_cache(history: &[ChatMessage]) -> Vec<ChatMessage> {
+    history
+        .iter()
+        .filter(|m| m.role == "user" || m.role == "assistant")
+        .cloned()
+        .collect()
 }
 
 fn save_interactive_session_history(
@@ -3996,7 +4011,7 @@ pub async fn run(
     let channel_name = if interactive { "cli" } else { "daemon" };
     let memory_session_id = session_state_file
         .as_deref()
-        .and_then(memory_session_id_from_state_file);
+        .and_then(crate::agent::session_record::memory_session_id_for_cli_path);
 
     // ── Execute ──────────────────────────────────────────────────
     let start = Instant::now();
@@ -4083,11 +4098,21 @@ pub async fn run(
         }
 
         // Compute per-turn excluded MCP tools from tool_filter_groups.
-        let excluded_tools = compute_excluded_mcp_tools(
+        let base_excluded = compute_excluded_mcp_tools(
             &tools_registry,
             &config.agent.tool_filter_groups,
             &effective_msg,
         );
+        let deferred_mcp =
+            config.mcp.deferred_loading && config.mcp.enabled && !config.mcp.servers.is_empty();
+        let excluded_tools = crate::agent::tool_router::merge_exclusions_for_turn(
+            base_excluded,
+            &config.agent.tool_router,
+            &tools_registry,
+            &effective_msg,
+            deferred_mcp,
+        )
+        .await;
 
         let transcript_session_key = memory_session_id
             .clone()
@@ -4371,11 +4396,21 @@ pub async fn run(
             history.push(ChatMessage::user(&enriched));
 
             // Compute per-turn excluded MCP tools from tool_filter_groups.
-            let excluded_tools = compute_excluded_mcp_tools(
+            let base_excluded = compute_excluded_mcp_tools(
                 &tools_registry,
                 &config.agent.tool_filter_groups,
                 &effective_input,
             );
+            let deferred_mcp =
+                config.mcp.deferred_loading && config.mcp.enabled && !config.mcp.servers.is_empty();
+            let excluded_tools = crate::agent::tool_router::merge_exclusions_for_turn(
+                base_excluded,
+                &config.agent.tool_router,
+                &tools_registry,
+                &effective_input,
+                deferred_mcp,
+            )
+            .await;
 
             let transcript_session_key = memory_session_id
                 .clone()
@@ -4488,6 +4523,24 @@ pub async fn run(
                     }
                     compaction_meta.last_summary_excerpt = outcome.summary_excerpt;
                     println!("🧹 Auto-compaction complete");
+                    if config.agent.session_archive_retention_days > 0 {
+                        let retention = std::time::Duration::from_secs(
+                            u64::from(config.agent.session_archive_retention_days)
+                                .saturating_mul(86400),
+                        );
+                        match crate::agent::session_record::gc_compaction_archives_older_than(
+                            retention,
+                        ) {
+                            Ok(n) if n > 0 => {
+                                tracing::info!(
+                                    removed = n,
+                                    "Removed old session compaction archives (retention policy)"
+                                );
+                            }
+                            Err(e) => tracing::warn!(error = %e, "Session archive GC failed"),
+                            _ => {}
+                        }
+                    }
                 }
             }
 
@@ -4842,14 +4895,24 @@ pub async fn process_message(
         ChatMessage::system(&system_prompt),
         ChatMessage::user(&enriched),
     ];
-    let mut excluded_tools = compute_excluded_mcp_tools(
+    let mut base_excluded = compute_excluded_mcp_tools(
         &tools_registry,
         &config.agent.tool_filter_groups,
         effective_msg_ref,
     );
     if config.autonomy.level != AutonomyLevel::Full {
-        excluded_tools.extend(config.autonomy.non_cli_excluded_tools.iter().cloned());
+        base_excluded.extend(config.autonomy.non_cli_excluded_tools.iter().cloned());
     }
+    let deferred_mcp =
+        config.mcp.deferred_loading && config.mcp.enabled && !config.mcp.servers.is_empty();
+    let excluded_tools = crate::agent::tool_router::merge_exclusions_for_turn(
+        base_excluded,
+        &config.agent.tool_router,
+        &tools_registry,
+        effective_msg_ref,
+        deferred_mcp,
+    )
+    .await;
 
     let transcript_key = session_id
         .map(String::from)

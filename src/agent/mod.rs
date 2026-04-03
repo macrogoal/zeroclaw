@@ -13,6 +13,7 @@ pub mod session_record;
 pub mod session_transcript;
 pub mod thinking;
 pub mod tool_result_offload;
+pub mod tool_router;
 
 #[cfg(test)]
 mod tests;

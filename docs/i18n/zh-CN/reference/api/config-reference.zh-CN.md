@@ -2,7 +2,7 @@
 
 本文档是常见配置部分和默认值的高信息量参考。
 
-最后验证时间：**2026年2月21日**。
+最后验证时间：**2026年4月2日**。
 
 启动时的配置路径解析顺序：
 
@@ -82,6 +82,7 @@ runtime_trace_max_entries = 200
 | `parallel_tools` | `false` | 在单次迭代中启用并行工具执行 |
 | `tool_dispatcher` | `auto` | 工具调度策略 |
 | `tool_call_dedup_exempt` | `[]` | 免除轮次内重复调用抑制的工具名称 |
+| `tool_router` | _默认关闭_ | 可选的小型模型路由器，按用户消息收窄可见工具（见 `[agent.tool_router]`） |
 
 注意事项：
 
@@ -90,6 +91,45 @@ runtime_trace_max_entries = 200
 - 在 CLI、网关和渠道工具循环中，当待处理调用不需要审批门控时，多个独立工具调用默认会并发执行；结果顺序保持稳定。
 - `parallel_tools` 适用于 `Agent::turn()` API 表面。它不控制 CLI、网关或渠道处理程序使用的运行时循环。
 - `tool_call_dedup_exempt` 接受精确工具名称数组。此处列出的工具允许在同一轮次中使用相同参数多次调用，绕过重复数据删除检查。示例：`tool_call_dedup_exempt = [\"browser\"]`。
+
+### `[agent.tool_router]`
+
+可选的**动态工具路由器**：在每条用户消息发给主模型之前，ZeroClaw 可以调用兼容 OpenAI 的聊天接口，由其返回一个 JSON 工具名数组，表示本轮**保留**在工具模式中的工具。其余已注册工具（未被 `[agent.tool_filter_groups]` 或渠道自主性规则排除的候选）在本轮对主模型**隐藏**，从而减小系统提示与原生工具负载。
+
+与 `tool_filter_groups`（按关键词/通配符筛选 MCP 工具）以及 MCP 延迟加载互补：当启用 `mcp.deferred_loading` 时，若候选工具中存在 `tool_search`，路由器会自动保留它，以便主模型仍能按需发现延迟加载的 MCP 工具。
+
+| 键 | 默认值 | 用途 |
+|---|---|---|
+| `enabled` | `false` | 为 `true` 时，每个用户轮次在主 LLM 之前运行路由器 |
+| `base_url` | `""` | OpenAI 兼容 API 基址（例如 `http://127.0.0.1:11437/v1`）；启用时必须填写 |
+| `model` | `""` | 路由器所用模型 id；启用时必须填写 |
+| `max_tools` | `10` | 在强制保留项（`always_include`，以及延迟 MCP 时的 `tool_search`）之后，主模型最多可见的工具数量上限 |
+| `temperature` | `0.1` | 路由器请求的温度 |
+| `timeout_ms` | `800` | 路由器 HTTP 超时（毫秒） |
+| `fallback_to_all_tools` | `true` | 路由器失败、返回空数组 `[]` 或无法解析输出时，不应用路由器排除规则，向主模型展示全部候选工具 |
+| `api_key` | _无_ | 可选 Bearer 令牌（`Authorization: Bearer`） |
+| `always_include` | `[]` | 启用路由时始终暴露的工具名（例如 `memory_recall`） |
+
+注意事项：
+
+- 路由器 HTTP 客户端与其他出站请求使用相同的代理配置（服务键 `agent.tool_router`）。
+- 当 `fallback_to_all_tools = false` 且路由器**成功**返回空数组时，本轮会排除全部候选工具（严格模式）；传输/解析失败仍会回退为展示全部候选，避免代理不可用。
+- 委托子代理（`delegate`）路径当前**不**应用 `tool_router`。
+
+示例（本地小模型作路由器，主模型配置不变）：
+
+```toml
+[agent.tool_router]
+enabled = true
+base_url = "http://127.0.0.1:11437/v1"
+model = "Qwen_Qwen3-4B-Instruct-2507"
+max_tools = 10
+temperature = 0.1
+timeout_ms = 800
+fallback_to_all_tools = true
+# always_include = ["memory_recall"]
+# api_key = "sk-..."
+```
 
 ## `[security.otp]`
 
