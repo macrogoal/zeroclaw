@@ -6,9 +6,12 @@
 //! This module provides a typed HTTP client for the iLink Bot REST API.
 //! All communication is HTTPS; bearer-token auth; AES-128-ECB for media CDN.
 
+pub use super::error::{ILinkErrorCode, ILinkErrorResponse};
+
 use anyhow::Context as _;
 use base64::Engine as _;
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 const ILINK_API_BASE: &str = "https://ilinkapi.weixin.qq.com";
 
@@ -353,6 +356,13 @@ impl WeXinApiClient {
     ///   - New messages arrive (returns immediately with messages)
     ///   - `timeout_ms` elapses (returns with empty `msgs`)
     ///   - An error occurs (errcode in response)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error with semantic meaning:
+    /// - `SessionTimeout (-14)`: Cursor expired, reset to empty
+    /// - `InvalidToken (-20)`: Need to re-authenticate
+    /// - `RateLimited (-100)`: Too many requests, wait before retry
     pub async fn get_updates(
         &self,
         cursor: Option<&str>,
@@ -367,18 +377,37 @@ impl WeXinApiClient {
             .post(format!("{}/getupdates", ILINK_API_BASE))
             .headers(self.make_headers())
             .json(&body)
-            .timeout(std::time::Duration::from_millis(timeout_ms + 5_000))
+            .timeout(Duration::from_millis(timeout_ms + 5_000))
             .send()
             .await
-            .context("iLink getUpdates HTTP request failed")?;
+            .map_err(|e| {
+                // Classify network errors
+                if e.is_timeout() {
+                    anyhow::anyhow!(ILinkErrorCode::SessionTimeout.description())
+                } else if e.is_connect() {
+                    anyhow::anyhow!("iLink connection failed: {}", e)
+                } else {
+                    anyhow::anyhow!("iLink getUpdates HTTP request failed: {}", e)
+                }
+            })?;
+
+        // Check HTTP status
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "iLink getUpdates HTTP error {}: {}",
+                status,
+                err_body
+            ));
+        }
 
         let result: GetUpdatesResp = resp
             .json()
             .await
             .context("iLink getUpdates parse response failed")?;
 
-        // errcode -14 = session timeout — the cursor has expired.
-        // The server has reset state; we must start fresh with an empty cursor.
+        // Handle session timeout specially
         if result.errcode == Some(-14) {
             tracing::debug!("WeXin: session timeout (errcode -14), resetting cursor");
             return Ok(GetUpdatesResp {
@@ -387,13 +416,23 @@ impl WeXinApiClient {
             });
         }
 
+        // Handle invalid token
+        if result.errcode == Some(-20) {
+            tracing::warn!("WeXin: invalid token (errcode -20), need re-auth");
+            return Err(anyhow::anyhow!(
+                "{}. Please run: openclaw channels login --channel openclaw-weixin",
+                ILinkErrorCode::InvalidToken.description()
+            ));
+        }
+
+        // Check for other errors
         if result.ret != 0 {
-            anyhow::bail!(
-                "iLink getUpdates failed: ret={} errcode={:?} errmsg={:?}",
-                result.ret,
-                result.errcode,
-                result.errmsg
-            );
+            let code = ILinkErrorCode::from_code(result.errcode.unwrap_or(result.ret));
+            return Err(anyhow::anyhow!(
+                "iLink getUpdates error ({}): {}",
+                result.errcode.unwrap_or(result.ret),
+                code.description()
+            ));
         }
 
         Ok(result)
@@ -403,6 +442,12 @@ impl WeXinApiClient {
     ///
     /// `context_token` should be the value from the incoming message being replied to.
     /// For proactive (bot-initiated) messages, pass an empty string.
+    ///
+    /// # Errors
+    ///
+    /// - `MessageTooLong (-301)`: Message exceeds limit
+    /// - `ContentBlocked (-500)`: Content filtered by moderation
+    /// - `InvalidToken (-20)`: Need to re-authenticate
     pub async fn send_message(
         &self,
         to_user_id: &str,
@@ -424,16 +469,32 @@ impl WeXinApiClient {
             .json(&body)
             .send()
             .await
-            .context("iLink sendMessage HTTP request failed")?;
+            .map_err(|e| {
+                if e.is_timeout() {
+                    anyhow::anyhow!("iLink sendMessage timeout")
+                } else {
+                    anyhow::anyhow!("iLink sendMessage HTTP error: {}", e)
+                }
+            })?;
 
         if !resp.status().is_success() {
             let status = resp.status();
             let err_body = resp.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "iLink sendMessage failed: {} — {}",
+            // Try to parse as JSON for structured error
+            if let Ok(err_resp) = serde_json::from_str::<ILinkErrorResponse>(&err_body) {
+                let code = err_resp.error_code();
+                return Err(anyhow::anyhow!(
+                    "iLink sendMessage error ({}): {} — {}",
+                    err_resp.errcode.unwrap_or(status.as_u16() as i32),
+                    code.description(),
+                    err_resp.errmsg.unwrap_or_default()
+                ));
+            }
+            return Err(anyhow::anyhow!(
+                "iLink sendMessage HTTP error {}: {}",
                 status,
                 err_body
-            );
+            ));
         }
 
         Ok(())
@@ -441,6 +502,10 @@ impl WeXinApiClient {
 
     /// Get account configuration, including the `typing_ticket` needed for
     /// the sendTyping indicator.
+    ///
+    /// # Errors
+    /// - `InvalidToken (-20)`: Need to re-authenticate
+    /// - `UserNotFound (-200)`: User ID does not exist or is blocked
     pub async fn get_config(&self, user_id: &str) -> anyhow::Result<GetConfigResp> {
         let body = GetConfigReq {
             ilink_user_id: user_id,
@@ -454,7 +519,18 @@ impl WeXinApiClient {
             .json(&body)
             .send()
             .await
-            .context("iLink getConfig HTTP request failed")?;
+            .map_err(|e| {
+                anyhow::anyhow!("iLink getConfig HTTP error: {}", e)
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let err_body = resp.text().await.unwrap_or_default();
+            return Err(anyhow::anyhow!(
+                "iLink getConfig HTTP error {}: {}",
+                status, err_body
+            ));
+        }
 
         let result: GetConfigResp = resp
             .json()
@@ -462,7 +538,11 @@ impl WeXinApiClient {
             .context("iLink getConfig parse response failed")?;
 
         if result.ret != 0 {
-            anyhow::bail!("iLink getConfig failed: ret={}", result.ret);
+            let code = ILinkErrorCode::from_code(result.ret);
+            return Err(anyhow::anyhow!(
+                "iLink getConfig error (ret={}): {}",
+                result.ret, code.description()
+            ));
         }
 
         Ok(result)
@@ -472,6 +552,8 @@ impl WeXinApiClient {
     ///
     /// Requires a `typing_ticket` obtained from `get_config()`.
     /// Tencent's client shows "typing..." while status=1 is active.
+    ///
+    /// Failures are logged but not propagated — typing is non-critical.
     pub async fn send_typing(
         &self,
         user_id: &str,
@@ -491,11 +573,19 @@ impl WeXinApiClient {
             .json(&body)
             .send()
             .await
-            .context("iLink sendTyping HTTP request failed")?;
+            .map_err(|e| {
+                tracing::warn!("WeXin: sendTyping HTTP error (non-critical): {}", e);
+                anyhow::anyhow!("iLink sendTyping HTTP error: {}", e)
+            })?;
 
         if !resp.status().is_success() {
             let err_body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("iLink sendTyping failed: {}", err_body);
+            tracing::debug!(
+                "WeXin: sendTyping failed (non-critical): {}",
+                err_body
+            );
+            // Don't fail on typing errors — they're cosmetic
+            return Ok(());
         }
 
         Ok(())
@@ -505,6 +595,11 @@ impl WeXinApiClient {
     ///
     /// Call this before uploading a file, then use the returned `upload_param`
     /// as the query string when PUTing the encrypted file to the CDN.
+    ///
+    /// # Errors
+    /// - `FileTooLarge (-303)`: File exceeds size limit
+    /// - `InvalidMediaType (-302)`: Unsupported media format
+    /// - `UploadFailed (-400)`: CDN returned error
     pub async fn get_upload_url(&self, params: &UploadParams) -> anyhow::Result<UploadUrlResp> {
         let resp = self
             .client
@@ -513,7 +608,22 @@ impl WeXinApiClient {
             .json(params)
             .send()
             .await
-            .context("iLink getUploadUrl HTTP request failed")?;
+            .map_err(|e| {
+                anyhow::anyhow!("iLink getUploadUrl HTTP error: {}", e)
+            })?;
+
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let code = match status.as_u16() {
+                413 => ILinkErrorCode::FileTooLarge,
+                415 => ILinkErrorCode::InvalidMediaType,
+                _ => ILinkErrorCode::UploadFailed,
+            };
+            return Err(anyhow::anyhow!(
+                "iLink getUploadUrl error ({}): {}",
+                status, code.description()
+            ));
+        }
 
         let result: UploadUrlResp = resp
             .json()

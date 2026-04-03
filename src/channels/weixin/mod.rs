@@ -34,6 +34,7 @@
 mod api;
 pub mod crypto;
 pub mod auth;
+pub mod error;
 
 use super::media_pipeline::MediaAttachment;
 use super::traits::{Channel, ChannelMessage, SendMessage};
@@ -906,7 +907,7 @@ impl WeXinChannel {
             &self,
             encrypt_param: &str,
             aes_key_b64: &str,
-            suggested_ext: &str,
+            _suggested_ext: &str,
         ) -> anyhow::Result<(String, Option<String>)> {
             // Step 1: Decrypt CDN URL
             let url = crypto::decrypt_cdn_url(encrypt_param, aes_key_b64)
